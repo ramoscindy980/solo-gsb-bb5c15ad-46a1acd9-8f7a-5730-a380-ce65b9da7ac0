@@ -53,6 +53,17 @@ class ExamTaskIn(BaseModel):
     mutex_groups: List[List[QuestionId]] = Field(
         default_factory=list, description="互斥题组：每组至多选取 1 题"
     )
+    paper_count: Optional[int] = Field(
+        None,
+        ge=1,
+        le=5,
+        description="一次生成的平行卷数量（2~5）；缺省或为 1 时按单卷模式响应",
+    )
+    max_shared_questions: Optional[int] = Field(
+        None,
+        ge=0,
+        description="任意两份平行卷的共同题数上限；多卷模式缺省为 0（平行卷互不重题）",
+    )
     seed: int = Field(42, description="随机种子，保证同请求结果可复现")
 
     @field_validator("total_score")
@@ -94,6 +105,12 @@ class ExamTaskIn(BaseModel):
             missing = [qid for qid in group if qid not in id_set]
             if missing:
                 raise ValueError(f"第 {gi} 个互斥题组引用了题库中不存在的题目: {missing}")
+
+        # max_shared_questions 仅在多卷模式下有意义
+        if self.paper_count is None and self.max_shared_questions is not None:
+            raise ValueError(
+                "max_shared_questions 仅在 paper_count >= 2 的多卷模式下可设置"
+            )
         return self
 
 
@@ -108,10 +125,39 @@ class QuestionOut(BaseModel):
 class ConflictConstraint(BaseModel):
     kind: str = Field(..., description="约束类别")
     detail: dict = Field(..., description="约束内容（原始请求中的表达形式）")
+    scope: Optional[str] = Field(
+        None,
+        description="多卷模式下的约束作用域：paper（单卷约束）/ cross（跨卷重叠上限）；"
+                    "单卷模式缺省",
+    )
+    paper: Optional[int] = Field(
+        None, description="scope=paper 时所属试卷序号（从 0 开始）"
+    )
+
+
+class PaperResult(BaseModel):
+    """多卷模式中的单份卷结果。"""
+
+    paper_index: int = Field(..., description="试卷序号（从 0 开始）")
+    paper: List[QuestionOut] = Field(..., description="完整题目对象")
+    selected_ids: List[QuestionId]
+    total_score: int
+    average_difficulty: float
+    difficulty_deviation: float
+    type_counts: Dict[str, int]
+    knowledge_point_counts: Dict[str, int]
+    repeated_knowledge_points: int
+
+
+class SharedQuestionPair(BaseModel):
+    papers: List[int] = Field(..., description="两份卷的序号 [a, b]，a < b")
+    shared_count: int = Field(..., description="共同题数")
+    shared_ids: List[QuestionId] = Field(..., description="共同题编号（按编号规范化排序）")
 
 
 class TaskResult(BaseModel):
     status: str = Field(..., description="feasible / infeasible / error")
+    # ---- 单卷模式字段（多卷模式下缺省）----
     paper: Optional[List[QuestionOut]] = None
     selected_ids: Optional[List[QuestionId]] = None
     total_score: Optional[int] = None
@@ -120,6 +166,20 @@ class TaskResult(BaseModel):
     type_counts: Optional[Dict[str, int]] = None
     knowledge_point_counts: Optional[Dict[str, int]] = None
     repeated_knowledge_points: Optional[int] = None
+    # ---- 多卷模式字段 ----
+    paper_count: Optional[int] = Field(None, description="平行卷数量（2~5）")
+    max_shared_questions: Optional[int] = Field(None, description="跨卷共同题数上限")
+    papers: Optional[List[PaperResult]] = Field(None, description="各卷结果（按卷序号）")
+    total_difficulty_deviation: Optional[float] = Field(
+        None, description="各卷难度偏差总和（首要择优指标）"
+    )
+    total_shared_questions: Optional[int] = Field(
+        None, description="跨卷重复题总数 Σ_{a<b}|卷a∩卷b|（次要择优指标）"
+    )
+    shared_questions: Optional[List[SharedQuestionPair]] = Field(
+        None, description="逐对卷统计的共同题明细"
+    )
+    # ---- 通用字段 ----
     seed: Optional[int] = None
     conflict_constraints: Optional[List[ConflictConstraint]] = None
     message: Optional[str] = None
