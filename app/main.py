@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="智能组卷 API",
-    description="面向教研组的题库快照约束组卷服务（FastAPI + SQLite + OR-Tools CP-SAT）",
-    version="1.0.0",
+    description="面向教研组的题库快照约束组卷服务（FastAPI + SQLite + OR-Tools CP-SAT），支持 2~5 份平行卷联合组卷",
+    version="1.1.0",
     lifespan=lifespan,
 )
 

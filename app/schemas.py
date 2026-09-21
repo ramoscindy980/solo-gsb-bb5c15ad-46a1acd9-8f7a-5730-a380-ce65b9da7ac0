@@ -53,6 +53,17 @@ class ExamTaskIn(BaseModel):
     mutex_groups: List[List[QuestionId]] = Field(
         default_factory=list, description="互斥题组：每组至多选取 1 题"
     )
+    paper_count: Optional[int] = Field(
+        None,
+        ge=1,
+        le=5,
+        description="平行卷份数：2~5 一次生成多份平行卷；缺省（或 1）为单卷，响应结构保持兼容",
+    )
+    max_shared_questions: Optional[int] = Field(
+        None,
+        ge=0,
+        description="任意两卷共同题数上限，仅 paper_count>=2 时生效；缺省为 0（平行卷互不重复）",
+    )
     seed: int = Field(42, description="随机种子，保证同请求结果可复现")
 
     @field_validator("total_score")
@@ -94,6 +105,10 @@ class ExamTaskIn(BaseModel):
             missing = [qid for qid in group if qid not in id_set]
             if missing:
                 raise ValueError(f"第 {gi} 个互斥题组引用了题库中不存在的题目: {missing}")
+
+        # max_shared_questions 仅在多卷请求下有意义
+        if self.max_shared_questions is not None and (self.paper_count or 1) < 2:
+            raise ValueError("max_shared_questions 仅在 paper_count 为 2~5 时可设置")
         return self
 
 
@@ -107,11 +122,35 @@ class QuestionOut(BaseModel):
 
 class ConflictConstraint(BaseModel):
     kind: str = Field(..., description="约束类别")
+    scope: Optional[str] = Field(
+        None, description="per_paper（单卷约束，detail.paper 为卷序号）/ cross_paper（跨卷重叠上限）"
+    )
     detail: dict = Field(..., description="约束内容（原始请求中的表达形式）")
+
+
+class PaperResult(BaseModel):
+    """单份卷的组卷结果（多卷响应中的 papers 元素）。"""
+
+    paper: List[QuestionOut]
+    selected_ids: List[QuestionId]
+    total_score: int
+    average_difficulty: float
+    difficulty_deviation: float
+    type_counts: Dict[str, int]
+    knowledge_point_counts: Dict[str, int]
+    repeated_knowledge_points: int
+
+
+class SharedQuestionPair(BaseModel):
+    papers: List[int] = Field(..., description="两份卷的序号（从 0 起）")
+    count: int = Field(..., description="两卷共同题数")
+    question_ids: List[QuestionId] = Field(..., description="共同题编号（按题库顺序）")
 
 
 class TaskResult(BaseModel):
     status: str = Field(..., description="feasible / infeasible / error")
+
+    # —— 单卷响应（未传 paper_count 时结构保持兼容）——
     paper: Optional[List[QuestionOut]] = None
     selected_ids: Optional[List[QuestionId]] = None
     total_score: Optional[int] = None
@@ -120,6 +159,15 @@ class TaskResult(BaseModel):
     type_counts: Optional[Dict[str, int]] = None
     knowledge_point_counts: Optional[Dict[str, int]] = None
     repeated_knowledge_points: Optional[int] = None
+
+    # —— 多卷响应（paper_count 为 2~5）——
+    paper_count: Optional[int] = None
+    max_shared_questions: Optional[int] = None
+    papers: Optional[List[PaperResult]] = None
+    total_difficulty_deviation: Optional[float] = None
+    total_shared_questions: Optional[int] = None
+    shared_question_pairs: Optional[List[SharedQuestionPair]] = None
+
     seed: Optional[int] = None
     conflict_constraints: Optional[List[ConflictConstraint]] = None
     message: Optional[str] = None
